@@ -52,7 +52,7 @@ impl ArchiveError {
         Self::FileNotFound { path: path.display().to_string(), file_name: file_name.into() }
     }
 
-    fn unsupported_inner_file(path: &Path, file_name: &str) -> Self {
+    pub(crate) fn unsupported_inner_file(path: &Path, file_name: &str) -> Self {
         Self::UnsupportedInnerFile { path: path.display().to_string(), file_name: file_name.into() }
     }
 }
