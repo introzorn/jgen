@@ -1,0 +1,63 @@
+# Сборка jgenesis-cli.exe для Windows без установки чего-либо на локальную машину.
+# Запуск: GitHub → Actions → "Build Windows CLI (manual)" → Run workflow → скачать artifact.
+
+name: Build Windows CLI (manual)
+
+on:
+  workflow_dispatch:
+
+env:
+  SDL_VERSION: "3.4.10"
+  DXC_RELEASE_TAG: v1.9.2602.24
+  DXC_ZIP_FILE: dxc_2026_05_27.zip
+
+jobs:
+  build-windows-cli:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust stable + nightly (for RUSTFLAGS)
+        run: |
+          rustup update stable
+          rustup toolchain add nightly
+
+      - name: Install mingw-w64 (Windows cross-compile)
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+
+      - name: Add Windows GNU target
+        run: |
+          rustup target add x86_64-pc-windows-gnu
+          rustup target add --toolchain nightly x86_64-pc-windows-gnu
+
+      - name: Download Windows SDL3
+        run: |
+          wget -q "https://github.com/libsdl-org/SDL/releases/download/release-$SDL_VERSION/SDL3-$SDL_VERSION-win32-x64.zip"
+          unzip -q "SDL3-$SDL_VERSION-win32-x64.zip" -d sdl3
+
+      - name: Download dxcompiler.dll
+        run: |
+          mkdir dxcompiler && cd dxcompiler
+          wget -q "https://github.com/microsoft/DirectXShaderCompiler/releases/download/$DXC_RELEASE_TAG/$DXC_ZIP_FILE"
+          unzip -q "$DXC_ZIP_FILE"
+
+      - name: Build jgenesis-cli (release-lto)
+        run: |
+          RUSTFLAGS="-C target-cpu=x86-64-v2 -Z tune-cpu=x86-64-v3" \
+          cargo +nightly build --profile release-lto --target x86_64-pc-windows-gnu -p jgenesis-cli
+
+      - name: Package zip
+        run: |
+          mkdir dist
+          cp target/x86_64-pc-windows-gnu/release-lto/jgenesis-cli.exe dist/
+          cp sdl3/SDL3.dll dist/
+          cp dxcompiler/bin/x64/dxcompiler.dll dist/
+          cp LICENSE dist/LICENSE-jgenesis.txt
+          cd dist && zip -r ../jgenesis-cli-windows-x86_64-patched.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jgenesis-cli-windows-patched
+          path: jgenesis-cli-windows-x86_64-patched.zip
