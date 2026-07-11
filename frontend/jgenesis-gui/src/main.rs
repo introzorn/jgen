@@ -51,6 +51,10 @@ struct Args {
     #[arg(long, value_name = "DEVICE")]
     audio_device: Option<String>,
 
+    /// Launch the emulator in fullscreen after applying --x/--y window placement (overrides config)
+    #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
+    fullscreen: bool,
+
     /// Print version string and immediately exit
     #[arg(short = 'v', long, default_value_t = false, action = clap::ArgAction::SetTrue)]
     version: bool,
