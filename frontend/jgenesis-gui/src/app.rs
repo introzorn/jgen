@@ -321,6 +321,35 @@ pub struct LoadAtStartup {
     pub load_state_slot: Option<usize>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct LauncherOverrides {
+    pub window_x: Option<i32>,
+    pub window_y: Option<i32>,
+    pub window_width: Option<u32>,
+    pub window_height: Option<u32>,
+    pub audio_output_device: Option<String>,
+}
+
+impl LauncherOverrides {
+    fn apply_to_config(&self, config: &mut AppConfig) {
+        if let Some(x) = self.window_x {
+            config.common.window_x = Some(x);
+        }
+        if let Some(y) = self.window_y {
+            config.common.window_y = Some(y);
+        }
+        if let Some(width) = self.window_width {
+            config.common.window_width = Some(width);
+        }
+        if let Some(height) = self.window_height {
+            config.common.window_height = Some(height);
+        }
+        if let Some(device) = &self.audio_output_device {
+            config.common.audio_output_device = Some(device.clone());
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ConfigInfo {
     pub initial_config: AppConfig,
@@ -338,8 +367,8 @@ pub struct App {
     emu_thread: EmuThreadHandle,
     rom_list_thread: RomListThreadHandle,
     load_at_startup: Option<LoadAtStartup>,
+    launcher_overrides: LauncherOverrides,
     hide_gui: bool,
-    gui_viewport_hidden: bool,
     initial_focused: bool,
 }
 
@@ -348,6 +377,7 @@ impl App {
     pub fn new(
         config_info: ConfigInfo,
         load_at_startup: Option<LoadAtStartup>,
+        launcher_overrides: LauncherOverrides,
         hide_gui: bool,
         ctx: Context,
     ) -> Self {
@@ -372,8 +402,8 @@ impl App {
             emu_thread,
             rom_list_thread,
             load_at_startup,
+            launcher_overrides,
             hide_gui,
-            gui_viewport_hidden: hide_gui,
             initial_focused: false,
         }
     }
@@ -442,9 +472,13 @@ impl App {
         self.load_cheats_for_game(console, &path);
 
         self.emu_thread.stop_emulator_if_running();
+
+        let mut config = self.config.clone();
+        self.launcher_overrides.apply_to_config(&mut config);
+
         self.emu_thread.send(EmuThreadCommand::Run {
             console,
-            config: Box::new(self.config.clone()),
+            config: Box::new(config),
             cheats: Arc::clone(self.active_cheats()),
             input: EmulatorRunInput::OpenFile(path.clone()),
         });
@@ -1322,21 +1356,55 @@ impl App {
         });
     }
     fn hide_gui_viewport(&mut self, ctx: &Context) {
-        if self.hide_gui && !self.gui_viewport_hidden {
-            ctx.send_viewport_cmd(ViewportCommand::Visible(false));
-            self.gui_viewport_hidden = true;
+        if !self.hide_gui {
+            return;
         }
-    }
-}
 
-impl eframe::App for App {
-    fn ui(&mut self, ui: &mut Ui, _frame: &mut Frame) {
+        // eframe forces the window visible after the first paint; re-hide every frame.
+        ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+        ctx.send_viewport_cmd(ViewportCommand::Decorations(false));
+        ctx.send_viewport_cmd(ViewportCommand::InnerSize(Vec2::new(1.0, 1.0)));
+        ctx.send_viewport_cmd(ViewportCommand::OuterPosition(Pos2::new(-10_000.0, -10_000.0)));
+    }
+
+    fn update_hidden_gui(&mut self, ui: &mut Ui) {
         if self.emu_thread.exit_signal() {
             ui.send_viewport_cmd(ViewportCommand::Close);
             return;
         }
 
         self.hide_gui_viewport(ui.ctx());
+
+        if self.state.rendered_first_frame {
+            if let Some(load_at_startup) = self.load_at_startup.take() {
+                self.launch_emulator(load_at_startup.file_path, None);
+
+                if let Some(load_state_slot) = load_at_startup.load_state_slot {
+                    self.emu_thread.send(EmuThreadCommand::LoadState { slot: load_state_slot });
+                }
+
+                self.state.close_on_emulator_exit = true;
+            }
+        }
+
+        self.emu_thread.update_gui_focused(false);
+        self.check_emulator_error(ui);
+        self.check_for_close_on_emu_exit(ui);
+        self.state.rendered_first_frame = true;
+    }
+}
+
+impl eframe::App for App {
+    fn ui(&mut self, ui: &mut Ui, _frame: &mut Frame) {
+        if self.hide_gui {
+            self.update_hidden_gui(ui);
+            return;
+        }
+
+        if self.emu_thread.exit_signal() {
+            ui.send_viewport_cmd(ViewportCommand::Close);
+            return;
+        }
 
         if self.state.rom_list_refresh_needed && !self.rom_list_thread.any_scans_in_progress() {
             self.state.rom_list_refresh_needed = false;

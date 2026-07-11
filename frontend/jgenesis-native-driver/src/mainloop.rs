@@ -510,6 +510,8 @@ where
             initial_window_size.width,
             initial_window_size.height,
             common_config.launch_in_fullscreen,
+            common_config.window_x,
+            common_config.window_y,
         )?;
 
         let window_size = sdl_window_size(&window);
@@ -1076,11 +1078,21 @@ fn create_window(
     width: u32,
     height: u32,
     fullscreen: bool,
+    window_x: Option<i32>,
+    window_y: Option<i32>,
 ) -> NativeEmulatorResult<Window> {
     let mut window_builder = video.window(title, width, height);
     window_builder.metal_view();
     window_builder.resizable();
-    window_builder.position_centered();
+
+    match (window_x, window_y) {
+        (Some(x), Some(y)) => {
+            window_builder.position(x, y);
+        }
+        _ => {
+            window_builder.position_centered();
+        }
+    }
 
     if fullscreen {
         window_builder.fullscreen();

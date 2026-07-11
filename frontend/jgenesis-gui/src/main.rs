@@ -5,7 +5,7 @@ use eframe::NativeOptions;
 use egui::{IconData, ViewportBuilder};
 use env_logger::Env;
 use image::{DynamicImage, ImageFormat};
-use jgenesis_gui::app::{App, ConfigInfo, LoadAtStartup};
+use jgenesis_gui::app::{App, ConfigInfo, LauncherOverrides, LoadAtStartup};
 use jgenesis_native_config::AppConfig;
 use jgenesis_native_config::paths::{ConfigDirs, ConfigWithPath};
 use std::path::PathBuf;
@@ -31,6 +31,26 @@ struct Args {
     #[arg(long, requires = "startup_file_path")]
     hide_gui: bool,
 
+    /// Emulator window X position in pixels (both --x and --y required for custom placement)
+    #[arg(long)]
+    x: Option<i32>,
+
+    /// Emulator window Y position in pixels (both --x and --y required for custom placement)
+    #[arg(long)]
+    y: Option<i32>,
+
+    /// Emulator window width in pixels
+    #[arg(long)]
+    width: Option<u32>,
+
+    /// Emulator window height in pixels
+    #[arg(long)]
+    height: Option<u32>,
+
+    /// Audio output device SDL instance id or name substring
+    #[arg(long, value_name = "DEVICE")]
+    audio_device: Option<String>,
+
     /// Print version string and immediately exit
     #[arg(short = 'v', long, default_value_t = false, action = clap::ArgAction::SetTrue)]
     version: bool,
@@ -55,6 +75,16 @@ impl Args {
             file_path: file_path.clone(),
             load_state_slot: self.load_save_state,
         })
+    }
+
+    fn launcher_overrides(&self) -> LauncherOverrides {
+        LauncherOverrides {
+            window_x: self.x,
+            window_y: self.y,
+            window_width: self.width,
+            window_height: self.height,
+            audio_output_device: self.audio_device.clone(),
+        }
     }
 }
 
@@ -151,6 +181,10 @@ fn main() -> eframe::Result<()> {
         log::info!("Settings GUI will be hidden; application will exit when emulator closes");
     }
 
+    if args.x.is_some() ^ args.y.is_some() {
+        log::warn!("Both --x and --y should be set for custom emulator window placement");
+    }
+
     let (gui_width, gui_height) = initial_gui_size(&config_with_path.config);
 
     let icon = load_icon();
@@ -162,7 +196,13 @@ fn main() -> eframe::Result<()> {
         .with_icon(IconData { rgba: icon.into_bytes(), width: icon_width, height: icon_height });
 
     if args.hide_gui {
-        viewport = viewport.with_visible(false);
+        viewport = viewport
+            .with_visible(false)
+            .with_taskbar(false)
+            .with_decorations(false)
+            .with_inner_size([1.0, 1.0])
+            .with_resizable(false)
+            .with_active(false);
     }
 
     let options = NativeOptions { viewport, ..NativeOptions::default() };
@@ -174,13 +214,20 @@ fn main() -> eframe::Result<()> {
         config_dir_type,
     };
     let load_at_startup = args.load_at_startup();
+    let launcher_overrides = args.launcher_overrides();
     let hide_gui = args.hide_gui;
 
     eframe::run_native(
         "jgenesis",
         options,
         Box::new(|cc| {
-            Ok(Box::new(App::new(config_info, load_at_startup, hide_gui, cc.egui_ctx.clone())))
+            Ok(Box::new(App::new(
+                config_info,
+                load_at_startup,
+                launcher_overrides,
+                hide_gui,
+                cc.egui_ctx.clone(),
+            )))
         }),
     )
 }

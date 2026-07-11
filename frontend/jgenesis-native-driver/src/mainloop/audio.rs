@@ -2,7 +2,7 @@ use crate::config::CommonConfig;
 use jgenesis_common::audio::DynamicResamplingRate;
 use jgenesis_common::frontend::AudioOutput;
 use sdl3::AudioSubsystem;
-use sdl3::audio::{AudioCallback, AudioFormat, AudioSpec, AudioStream, AudioStreamWithCallback};
+use sdl3::audio::{AudioCallback, AudioDevice, AudioDeviceID, AudioFormat, AudioSpec, AudioStream, AudioStreamWithCallback};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::Thread;
@@ -24,6 +24,8 @@ pub enum AudioError {
     PauseStream(sdl3::Error),
     #[error("Error pushing audio samples to SDL3 audio stream: {0}")]
     QueueAudio(sdl3::Error),
+    #[error("Audio output device not found: {0}")]
+    DeviceNotFound(String),
 }
 
 pub type AudioResult<T> = Result<T, AudioError>;
@@ -80,9 +82,11 @@ impl AudioCallback<f32> for AudioQueueCallback {
 
 pub struct SdlAudioOutputHandle {
     audio_subsystem: AudioSubsystem,
+    audio_device: AudioDevice,
     audio_stream: AudioStreamWithCallback<AudioQueueCallback>,
     callback_state: Arc<Mutex<AudioCallbackState>>,
     output_frequency: u64,
+    output_device: Option<String>,
 }
 
 pub struct SdlAudioOutput {
@@ -103,18 +107,24 @@ pub struct SdlAudioOutput {
 impl SdlAudioOutputHandle {
     pub fn reload_config(&mut self, config: &CommonConfig) -> AudioResult<()> {
         let freq_changed = self.output_frequency != config.audio_output_frequency;
+        let device_changed = self.output_device != config.audio_output_device;
 
         self.output_frequency = config.audio_output_frequency;
+        self.output_device = config.audio_output_device.clone();
 
-        if freq_changed {
-            // Recreate audio stream on sample rate changes
-
-            log::info!("Recreating SDL audio queue with freq {}", config.audio_output_frequency);
+        if freq_changed || device_changed {
+            log::info!(
+                "Recreating SDL audio queue with freq {} and device {:?}",
+                config.audio_output_frequency,
+                config.audio_output_device
+            );
 
             self.audio_stream.pause().map_err(AudioError::PauseStream)?;
 
-            self.audio_stream =
-                open_audio_stream(&self.audio_subsystem, config, Arc::clone(&self.callback_state))?;
+            let (audio_device, audio_stream) =
+                open_audio_device_and_stream(&self.audio_subsystem, config, Arc::clone(&self.callback_state))?;
+            self.audio_device = audio_device;
+            self.audio_stream = audio_stream;
         }
 
         {
@@ -143,8 +153,8 @@ impl SdlAudioOutput {
     ) -> AudioResult<(Self, SdlAudioOutputHandle)> {
         let callback_state = Arc::new(Mutex::new(AudioCallbackState::new(config)));
 
-        let audio_stream =
-            open_audio_stream(&audio_subsystem, config, Arc::clone(&callback_state))?;
+        let (audio_device, audio_stream) =
+            open_audio_device_and_stream(&audio_subsystem, config, Arc::clone(&callback_state))?;
 
         let audio_output = Self {
             muted: config.mute_audio,
@@ -166,9 +176,11 @@ impl SdlAudioOutput {
 
         let handle = SdlAudioOutputHandle {
             audio_subsystem,
+            audio_device,
             audio_stream,
             callback_state,
             output_frequency: config.audio_output_frequency,
+            output_device: config.audio_output_device.clone(),
         };
 
         Ok((audio_output, handle))
@@ -214,26 +226,60 @@ impl SdlAudioOutput {
     }
 }
 
-fn open_audio_stream(
+fn resolve_playback_device_id(
+    audio: &AudioSubsystem,
+    device_spec: &str,
+) -> AudioResult<AudioDeviceID> {
+    if let Ok(device_id) = device_spec.parse::<u32>() {
+        log::info!("Using audio output device id {device_id}");
+        return Ok(AudioDeviceID::Device(sdl3::sys::audio::SDL_AudioDeviceID(device_id)));
+    }
+
+    let device_ids = audio
+        .audio_playback_device_ids()
+        .map_err(|err| AudioError::OpenStream(err))?;
+    let device_spec_lower = device_spec.to_lowercase();
+
+    for device_id in device_ids {
+        let Ok(name) = device_id.name() else { continue };
+        if name.to_lowercase().contains(&device_spec_lower) {
+            log::info!("Using audio output device '{name}' (matched '{device_spec}')");
+            return Ok(device_id);
+        }
+    }
+
+    Err(AudioError::DeviceNotFound(device_spec.to_owned()))
+}
+
+fn open_audio_device_and_stream(
     audio: &AudioSubsystem,
     config: &CommonConfig,
     callback_state: Arc<Mutex<AudioCallbackState>>,
-) -> AudioResult<AudioStreamWithCallback<AudioQueueCallback>> {
+) -> AudioResult<(AudioDevice, AudioStreamWithCallback<AudioQueueCallback>)> {
     let audio_callback = AudioQueueCallback { state: callback_state };
 
-    let stream = audio
-        .open_playback_stream(
-            &AudioSpec {
-                freq: Some(config.audio_output_frequency as i32),
-                channels: Some(CHANNELS),
-                format: Some(AudioFormat::f32_sys()),
-            },
-            audio_callback,
-        )
-        .map_err(AudioError::OpenStream)?;
+    let spec = AudioSpec {
+        freq: Some(config.audio_output_frequency as i32),
+        channels: Some(CHANNELS),
+        format: Some(AudioFormat::f32_sys()),
+    };
+
+    let device_id = match config.audio_output_device.as_deref() {
+        Some(device_spec) => resolve_playback_device_id(audio, device_spec)?,
+        None => {
+            log::info!("Using default SDL audio output device");
+            let device = AudioDevice::open_playback(audio, None, &spec)?;
+            let stream = device.open_playback_stream_with_callback(&spec, audio_callback)?;
+            stream.resume().map_err(AudioError::OpenStream)?;
+            return Ok((device, stream));
+        }
+    };
+
+    let device = AudioDevice::open_playback(audio, Some(&device_id), &spec)?;
+    let stream = device.open_playback_stream_with_callback(&spec, audio_callback)?;
     stream.resume().map_err(AudioError::OpenStream)?;
 
-    Ok(stream)
+    Ok((device, stream))
 }
 
 fn decibels_to_multiplier(decibels: f64) -> f64 {
