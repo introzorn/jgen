@@ -88,6 +88,7 @@ impl Args {
             window_width: self.width,
             window_height: self.height,
             audio_output_device: self.audio_device.clone(),
+            launch_in_fullscreen: self.fullscreen.then_some(true),
         }
     }
 }

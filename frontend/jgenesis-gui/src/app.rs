@@ -328,6 +328,7 @@ pub struct LauncherOverrides {
     pub window_width: Option<u32>,
     pub window_height: Option<u32>,
     pub audio_output_device: Option<String>,
+    pub launch_in_fullscreen: Option<bool>,
 }
 
 impl LauncherOverrides {
@@ -346,6 +347,9 @@ impl LauncherOverrides {
         }
         if let Some(device) = &self.audio_output_device {
             config.common.audio_output_device = Some(device.clone());
+        }
+        if let Some(launch_in_fullscreen) = self.launch_in_fullscreen {
+            config.common.launch_in_fullscreen = launch_in_fullscreen;
         }
     }
 }
