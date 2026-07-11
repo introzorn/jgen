@@ -31,12 +31,12 @@ struct Args {
     #[arg(long, requires = "startup_file_path")]
     hide_gui: bool,
 
-    /// Emulator window X position in pixels (both --x and --y required for custom placement)
-    #[arg(long)]
+    /// Emulator window X position in pixels; negative values are allowed (e.g. --x=-1920 for a left monitor)
+    #[arg(long, allow_hyphen_values = true, value_name = "PIXELS")]
     x: Option<i32>,
 
-    /// Emulator window Y position in pixels (both --x and --y required for custom placement)
-    #[arg(long)]
+    /// Emulator window Y position in pixels; negative values are allowed
+    #[arg(long, allow_hyphen_values = true, value_name = "PIXELS")]
     y: Option<i32>,
 
     /// Emulator window width in pixels
