@@ -268,15 +268,21 @@ fn open_audio_device_and_stream(
         Some(device_spec) => resolve_playback_device_id(audio, device_spec)?,
         None => {
             log::info!("Using default SDL audio output device");
-            let device = AudioDevice::open_playback(audio, None, &spec)?;
-            let stream = device.open_playback_stream_with_callback(&spec, audio_callback)?;
+            let device =
+                AudioDevice::open_playback(audio, None, &spec).map_err(AudioError::OpenStream)?;
+            let stream = device
+                .open_playback_stream_with_callback(&spec, audio_callback)
+                .map_err(AudioError::OpenStream)?;
             stream.resume().map_err(AudioError::OpenStream)?;
             return Ok((device, stream));
         }
     };
 
-    let device = AudioDevice::open_playback(audio, Some(&device_id), &spec)?;
-    let stream = device.open_playback_stream_with_callback(&spec, audio_callback)?;
+    let device = AudioDevice::open_playback(audio, Some(&device_id), &spec)
+        .map_err(AudioError::OpenStream)?;
+    let stream = device
+        .open_playback_stream_with_callback(&spec, audio_callback)
+        .map_err(AudioError::OpenStream)?;
     stream.resume().map_err(AudioError::OpenStream)?;
 
     Ok((device, stream))
