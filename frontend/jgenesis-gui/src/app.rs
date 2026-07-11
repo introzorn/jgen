@@ -338,6 +338,8 @@ pub struct App {
     emu_thread: EmuThreadHandle,
     rom_list_thread: RomListThreadHandle,
     load_at_startup: Option<LoadAtStartup>,
+    hide_gui: bool,
+    gui_viewport_hidden: bool,
     initial_focused: bool,
 }
 
@@ -346,11 +348,16 @@ impl App {
     pub fn new(
         config_info: ConfigInfo,
         load_at_startup: Option<LoadAtStartup>,
+        hide_gui: bool,
         ctx: Context,
     ) -> Self {
         let config = config_info.initial_config;
 
         let state = AppState::from_config(&config, &ctx);
+        let mut state = state;
+        if hide_gui {
+            state.close_on_emulator_exit = true;
+        }
         let emu_thread = emuthread::spawn(ctx.clone());
 
         let rom_list_thread = RomListThreadHandle::spawn(Arc::clone(&state.rom_list), ctx);
@@ -365,6 +372,8 @@ impl App {
             emu_thread,
             rom_list_thread,
             load_at_startup,
+            hide_gui,
+            gui_viewport_hidden: hide_gui,
             initial_focused: false,
         }
     }
@@ -1312,6 +1321,12 @@ impl App {
             self.config.gui_window_height = height;
         });
     }
+    fn hide_gui_viewport(&mut self, ctx: &Context) {
+        if self.hide_gui && !self.gui_viewport_hidden {
+            ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+            self.gui_viewport_hidden = true;
+        }
+    }
 }
 
 impl eframe::App for App {
@@ -1320,6 +1335,8 @@ impl eframe::App for App {
             ui.send_viewport_cmd(ViewportCommand::Close);
             return;
         }
+
+        self.hide_gui_viewport(ui.ctx());
 
         if self.state.rom_list_refresh_needed && !self.rom_list_thread.any_scans_in_progress() {
             self.state.rom_list_refresh_needed = false;
@@ -1337,14 +1354,18 @@ impl eframe::App for App {
                 self.state.close_on_emulator_exit = true;
             }
 
-            // Don't auto-focus the GUI window if -f/--file-path arg was set
-            if !self.initial_focused && !self.state.close_on_emulator_exit {
+            // Don't auto-focus the GUI window in launcher mode
+            if !self.initial_focused && !self.state.close_on_emulator_exit && !self.hide_gui {
                 ui.send_viewport_cmd(ViewportCommand::Focus);
                 self.initial_focused = ui.input(|input| input.raw.focused);
             }
         }
 
-        let gui_focused = ui.input(|input| input.raw.focused);
+        let gui_focused = if self.hide_gui {
+            false
+        } else {
+            ui.input(|input| input.raw.focused)
+        };
         self.emu_thread.update_gui_focused(gui_focused);
 
         let prev_config = self.config.clone();
@@ -1353,26 +1374,28 @@ impl eframe::App for App {
         self.check_waiting_for_input(ui);
         self.check_for_close_on_emu_exit(ui);
 
-        self.update_egui_theme(ui);
+        if !self.hide_gui {
+            self.update_egui_theme(ui);
 
-        self.render_menu(ui);
-        self.render_central_panel(ui);
+            self.render_menu(ui);
+            self.render_central_panel(ui);
 
-        self.render_windows(ui);
+            self.render_windows(ui);
 
-        self.update_window_size_in_config(ui);
+            self.update_window_size_in_config(ui);
 
-        if prev_config != self.config {
-            if should_reload_config(&prev_config, &self.config) {
-                self.reload_config();
+            if prev_config != self.config {
+                if should_reload_config(&prev_config, &self.config) {
+                    self.reload_config();
+                }
+
+                let config_str = toml::to_string_pretty(&self.config).unwrap();
+                if let Err(err) = fs::write(&self.config_path, config_str) {
+                    log::error!("Error serializing app config: {err}");
+                }
+
+                nes::update_palette_textures(ui, &self.state.nes_palette, &self.config.nes.palette);
             }
-
-            let config_str = toml::to_string_pretty(&self.config).unwrap();
-            if let Err(err) = fs::write(&self.config_path, config_str) {
-                log::error!("Error serializing app config: {err}");
-            }
-
-            nes::update_palette_textures(ui, &self.state.nes_palette, &self.config.nes.palette);
         }
 
         self.state.rendered_first_frame = true;

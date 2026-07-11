@@ -26,6 +26,11 @@ struct Args {
     #[arg(long, value_name = "SLOT")]
     load_save_state: Option<usize>,
 
+    /// Hide the settings GUI window. Requires -f/--file-path. The application exits when the
+    /// emulator window is closed.
+    #[arg(long, requires = "startup_file_path")]
+    hide_gui: bool,
+
     /// Print version string and immediately exit
     #[arg(short = 'v', long, default_value_t = false, action = clap::ArgAction::SetTrue)]
     version: bool,
@@ -142,18 +147,25 @@ fn main() -> eframe::Result<()> {
         log::info!("Will open file '{}' after starting", file_path.display());
     }
 
+    if args.hide_gui {
+        log::info!("Settings GUI will be hidden; application will exit when emulator closes");
+    }
+
     let (gui_width, gui_height) = initial_gui_size(&config_with_path.config);
 
     let icon = load_icon();
     let icon_width = icon.width();
     let icon_height = icon.height();
 
-    let options = NativeOptions {
-        viewport: ViewportBuilder::default().with_inner_size([gui_width, gui_height]).with_icon(
-            IconData { rgba: icon.into_bytes(), width: icon_width, height: icon_height },
-        ),
-        ..NativeOptions::default()
-    };
+    let mut viewport = ViewportBuilder::default()
+        .with_inner_size([gui_width, gui_height])
+        .with_icon(IconData { rgba: icon.into_bytes(), width: icon_width, height: icon_height });
+
+    if args.hide_gui {
+        viewport = viewport.with_visible(false);
+    }
+
+    let options = NativeOptions { viewport, ..NativeOptions::default() };
 
     let config_info = ConfigInfo {
         initial_config: config_with_path.config,
@@ -162,11 +174,14 @@ fn main() -> eframe::Result<()> {
         config_dir_type,
     };
     let load_at_startup = args.load_at_startup();
+    let hide_gui = args.hide_gui;
 
     eframe::run_native(
         "jgenesis",
         options,
-        Box::new(|cc| Ok(Box::new(App::new(config_info, load_at_startup, cc.egui_ctx.clone())))),
+        Box::new(|cc| {
+            Ok(Box::new(App::new(config_info, load_at_startup, hide_gui, cc.egui_ctx.clone())))
+        }),
     )
 }
 
